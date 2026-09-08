@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+.env*.local
+
+# SQLite database file and its WAL sidecars. Recreated by `npm run seed`.
+data/*.db
+data/*.db-*
