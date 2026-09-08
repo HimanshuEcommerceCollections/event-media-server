@@ -1,0 +1,2412 @@
+{
+  "info": {
+    "_postman_id": "b1e7a4d2-3c5f-4a8b-9d11-7f2c6e0a4c31",
+    "name": "Events & Media API",
+    "description": "# Events & Media API\n\nEvery endpoint the API serves, in an order that runs top to bottom: the sign-up\nrequests capture the one-time code and the tokens into collection variables,\nand everything after them uses those.\n\n**Run it with the Collection Runner** and it exercises the whole surface —\nsign-up, verification, the welcome perk, all the page content, a quote request,\nsign-in, sign-out, a password reset, and thirteen deliberate failures.\n\n## Before the first run\n\n1. Start the stack from the repository root: `docker compose up`.\n2. Select the **Events & Media — local** environment (or just leave `baseUrl`\n   at `http://localhost:4000`).\n\nNothing else needs setting. `01 · Sign up` generates a fresh email address\nevery run, so re-running never collides with the account it made last time.\n\n## Rate limits\n\nOne run fits inside the API's budgets. **A second run within the minute does\nnot** — the password endpoints allow 12 calls a minute per address and a run\nspends 10 of them.\n\nTo re-run freely, turn the limiter off. In `docker-compose.yml` under\n`services.api.environment` the line is already there, commented out:\n\n```yaml\nRATE_LIMIT_DISABLED: \"true\"\n```\n\nThen `docker compose up -d api`. The API logs a warning at startup while it is\noff, and the switch cannot take effect when `NODE_ENV=production`.\n\nLeave it alone and the collection still passes — just wait a minute between\nruns. The collection logs a warning to the Postman console whenever a 429\narrives on a request that did not expect one, so that failure is easy to\nrecognise.\n\n## Development codes\n\nThere is no mail provider wired up, so `EXPOSE_DEV_CODES=true` — the\ndevelopment default — echoes the one-time code back as `devCode` and the reset\ntoken as `devToken`. That is what lets these requests chain. It is forced off\nwhen `NODE_ENV=production`, so the auth folders cannot run end to end against a\nproduction API.\n\n## Shape of every response\n\nSuccess is always `{ \"data\": … }`. Failure is always\n`{ \"error\": { \"code\", \"message\", \"details\"? } }`, and `message` is written to\nbe shown to a user as-is. A collection-level test asserts that envelope on\nevery single response, so each request below only checks what is specific to\nit.\n\n## Auth\n\nThe collection sends `Authorization: Bearer {{accessToken}}` by default.\nRequests that must be anonymous — the health checks, and the \"perk without a\ntoken\" case — override it with **No Auth**.\n\nTwo rules are worth knowing before reading the auth folders, and both have\ntests that pin them down:\n\n- **A password alone is never a session.** `signup` and `signin` both end at a\n  one-time code; only `otp/verify` mints tokens.\n- **Nothing reveals whether an address is registered.** Signing up with an\n  address already on file answers exactly like signing in with it. Signing in\n  with an unknown address answers byte for byte like a wrong password, and\n  takes the same time. `password/forgot` always answers 202.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Runs after every request in the collection.",
+          "",
+          "// Every response is either { data } or { error }, so asserting",
+          "// the envelope once here keeps each request's own tests to what",
+          "// is actually specific to it.",
+          "pm.test(\"Response is a JSON envelope\", function () {",
+          "  pm.response.to.be.json;",
+          "  const body = pm.response.json();",
+          "  const hasData = Object.prototype.hasOwnProperty.call(body, \"data\");",
+          "  const hasError = Object.prototype.hasOwnProperty.call(body, \"error\");",
+          "  pm.expect(hasData || hasError, \"body has neither data nor error\").to.be.true;",
+          "  if (hasError) {",
+          "    pm.expect(body.error.code, \"an error needs a machine-readable code\").to.be.a(\"string\");",
+          "    pm.expect(body.error.message, \"an error needs a message fit to show a user\").to.be.a(\"string\");",
+          "  }",
+          "});",
+          "",
+          "// A 5xx is never an expected outcome here - not even in the",
+          "// error-cases folder, which is all 4xx by design. The one",
+          "// exception would be /health/ready reporting 503, and that is a",
+          "// real failure worth surfacing too.",
+          "pm.test(\"No server error\", function () {",
+          "  pm.expect(pm.response.code, \"check the API logs\").to.be.below(500);",
+          "});",
+          "",
+          "// A 429 on a request that does not expect one almost always means",
+          "// the run tripped the per-address ceiling rather than anything",
+          "// being wrong with the request. Say so, loudly.",
+          "if (pm.response.code === 429) {",
+          "  console.warn(",
+          "    \"429 from \" + pm.request.url.getPath() +",
+          "      \" - if this request did not expect it, the run hit the API's rate limit. \" +",
+          "      \"Set RATE_LIMIT_DISABLED=true on the API (see the collection description).\"",
+          "  );",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:4000",
+      "type": "string",
+      "description": "Where the API is listening. Overridden by the environment file."
+    },
+    {
+      "key": "fullName",
+      "value": "Postman Tester",
+      "type": "string",
+      "description": "The name the generated account signs up with. Its initials (PT) are asserted."
+    },
+    {
+      "key": "password",
+      "value": "postman-pw-9x",
+      "type": "string",
+      "description": "Must satisfy the API's rule: 8+ characters, a letter, and a number or symbol."
+    },
+    {
+      "key": "newPassword",
+      "value": "postman-pw-77z",
+      "type": "string",
+      "description": "What 07 resets the password to."
+    },
+    {
+      "key": "serviceSlug",
+      "value": "party-rentals",
+      "type": "string",
+      "description": "Which service 03 fetches. Also: entertainers, dj-music, photo-video, virtual-tours, drone-video."
+    },
+    {
+      "key": "legalSlug",
+      "value": "privacy",
+      "type": "string",
+      "description": "Which document 03 fetches: privacy or terms."
+    },
+    {
+      "key": "email",
+      "value": "",
+      "type": "string",
+      "description": "Generated fresh by 01 · Sign up on every run."
+    },
+    {
+      "key": "oldPassword",
+      "value": "",
+      "type": "string",
+      "description": "Captured by 07 before the reset."
+    },
+    {
+      "key": "otpCode",
+      "value": "",
+      "type": "string",
+      "description": "Captured from devCode."
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string",
+      "description": "Captured by otp/verify."
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string",
+      "description": "Captured by otp/verify."
+    },
+    {
+      "key": "previousRefreshToken",
+      "value": "",
+      "type": "string",
+      "description": "The rotated-out token, so the reuse test can try it."
+    },
+    {
+      "key": "resetToken",
+      "value": "",
+      "type": "string",
+      "description": "Captured from devToken."
+    },
+    {
+      "key": "perkLabel",
+      "value": "",
+      "type": "string",
+      "description": "The gift drawn at sign-up."
+    },
+    {
+      "key": "perkRevealedAt",
+      "value": "",
+      "type": "string",
+      "description": "When the card was scratched."
+    },
+    {
+      "key": "quoteReference",
+      "value": "",
+      "type": "string",
+      "description": "The EM-XXXXXX reference."
+    },
+    {
+      "key": "invalidCredentialsMessage",
+      "value": "",
+      "type": "string",
+      "description": "Captured so an unknown address can be compared against a wrong password."
+    }
+  ],
+  "item": [
+    {
+      "name": "00 · Health",
+      "description": "Two different questions.\n\n`/health` answers as long as the process is up. `/health/ready` also checks\nthe database and answers **503** if it is unreachable — that is the one\nCompose and a load balancer should watch.",
+      "item": [
+        {
+          "name": "Liveness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "Is the process up? Says nothing about whether it can serve.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Reports ok with an uptime\", function () {",
+                  "  const d = pm.response.json().data;",
+                  "  pm.expect(d.status).to.eql(\"ok\");",
+                  "  pm.expect(d.uptimeSeconds).to.be.a(\"number\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health/ready",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health",
+                "ready"
+              ]
+            },
+            "description": "Can the API actually serve? Answers 503 with an `error` envelope\nwhen the database is unreachable, so a failure here means the rest\nof this collection will fail too — check the API logs first.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Database is up\", function () {",
+                  "  const d = pm.response.json().data;",
+                  "  pm.expect(d.status).to.eql(\"ready\");",
+                  "  pm.expect(d.database).to.eql(\"up\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 · Auth — create an account",
+      "description": "The sign-up half of the flow, in order.\n\n**A password alone is never a session.** `signup` and `signin` both end at\na one-time code; only `otp/verify` mints tokens.\n\nWith no mail provider wired up, `EXPOSE_DEV_CODES=true` (the development\ndefault) echoes the code back as `devCode`, which is what lets these\nrequests chain. It is forced off when `NODE_ENV=production`, so this folder\nonly runs end to end against a development API.",
+      "item": [
+        {
+          "name": "Sign up",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/signup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signup"
+              ]
+            },
+            "description": "Creates the account and issues a one-time code. Answers **201** with\na challenge, *not* a session.\n\nA fresh email address is generated before the request so the\ncollection can be re-run without colliding with the account it made\nlast time.\n\nNote what this does **not** do: signing up with an address already\non file answers exactly like signing in with it — a code goes to\nthat inbox and only whoever reads it can proceed. See\n*08 · Error cases* for the requests that pin that behaviour down.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"{{fullName}}\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"acceptTos\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh address every run, so re-running the collection creates a",
+                  "// new account rather than colliding with the last one.",
+                  "pm.collectionVariables.set(\"email\", \"postman+\" + Date.now() + \"@example.com\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"201 Created\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Answers with a challenge, not a session\", function () {",
+                  "  pm.expect(d.status).to.eql(\"otp_required\");",
+                  "  pm.expect(d.purpose).to.eql(\"signup\");",
+                  "  pm.expect(d.codeLength).to.eql(6);",
+                  "  pm.expect(d, \"a session must not be handed out yet\").to.not.have.property(\"accessToken\");",
+                  "});",
+                  "",
+                  "pm.test(\"Development build echoes the code back\", function () {",
+                  "  pm.expect(d.devCode, \"set EXPOSE_DEV_CODES=true on the API\").to.match(/^[0-9]{6}$/);",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"otpCode\", d.devCode);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify the code (sign-up)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/otp/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "otp",
+                "verify"
+              ]
+            },
+            "description": "The only endpoint that mints tokens. On a **sign-up** verification it\nalso marks the email verified and returns the welcome perk, which is\ndrawn server-side, once — not in the scratch-card component — so it\nsurvives a reload and can be honoured against a booking.\n\nThe challenge is burned before the tokens are signed, so replaying\nthe same code cannot mint a second session.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{otpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Returns a session\", function () {",
+                  "  pm.expect(d.accessToken).to.be.a(\"string\").and.include(\".\");",
+                  "  pm.expect(d.refreshToken).to.be.a(\"string\").and.include(\".\");",
+                  "  pm.expect(d.expiresInSeconds).to.be.a(\"number\");",
+                  "});",
+                  "",
+                  "pm.test(\"Verifying the code verified the email\", function () {",
+                  "  pm.expect(d.user.emailVerified).to.be.true;",
+                  "  pm.expect(d.user.email).to.eql(pm.collectionVariables.get(\"email\"));",
+                  "  pm.expect(d.user.initials, \"derived from the full name\").to.eql(\"PT\");",
+                  "});",
+                  "",
+                  "pm.test(\"A welcome perk was drawn, unrevealed\", function () {",
+                  "  pm.expect(d.perk.label).to.be.a(\"string\").and.not.empty;",
+                  "  pm.expect(d.perk.revealedAt, \"nothing has scratched the card yet\").to.be.null;",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"accessToken\", d.accessToken);",
+                  "pm.collectionVariables.set(\"refreshToken\", d.refreshToken);",
+                  "pm.collectionVariables.set(\"perkLabel\", d.perk.label);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Who am I",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Needs a bearer token, because it would have nothing to return\nwithout one. Inherits the collection's `{{accessToken}}`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Is the account this run created\", function () {",
+                  "  pm.expect(d.email).to.eql(pm.collectionVariables.get(\"email\"));",
+                  "  pm.expect(d.role).to.eql(\"customer\");",
+                  "});",
+                  "",
+                  "pm.test(\"Carries the same perk the sign-up drew\", function () {",
+                  "  pm.expect(d.perk.label).to.eql(pm.collectionVariables.get(\"perkLabel\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Check the session",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/session",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "session"
+              ]
+            },
+            "description": "A cheap \"is this token still good?\" check that does not pull the\nwhole profile. `tokenRejected` separates *signed out* from *token\npresent but no longer valid*, so a client knows whether to try a\nrefresh."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Token is accepted\", function () {",
+                  "  pm.expect(d.authenticated).to.be.true;",
+                  "  pm.expect(d.tokenRejected).to.be.false;",
+                  "  pm.expect(d.email).to.eql(pm.collectionVariables.get(\"email\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh the session",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Rotates. The presented refresh token stops working, so a copy of it\nthat leaks later is useless — the next request proves that.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "const used = pm.collectionVariables.get(\"refreshToken\");",
+                  "",
+                  "pm.test(\"Issues a different pair\", function () {",
+                  "  pm.expect(d.refreshToken).to.not.eql(used);",
+                  "  pm.expect(d.accessToken).to.be.a(\"string\");",
+                  "});",
+                  "",
+                  "// Kept so the next request can try to reuse it.",
+                  "pm.collectionVariables.set(\"previousRefreshToken\", used);",
+                  "pm.collectionVariables.set(\"accessToken\", d.accessToken);",
+                  "pm.collectionVariables.set(\"refreshToken\", d.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reuse the rotated refresh token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Expected to fail with **401**. The JWT itself still verifies — its\nsignature and expiry are fine — but the `sessions` row it names was\nrevoked by the rotation, and that row is what decides. This is why\nrefresh tokens are backed by a table at all: a JWT alone cannot be\nrevoked.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{previousRefreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401 Unauthorized\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Rotation invalidated it server-side\", function () {",
+                  "  pm.expect(pm.response.json().error.code).to.eql(\"unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 · Perks",
+      "description": "The welcome gift drawn at sign-up.\n\nIt is chosen server-side, once, when the code is verified — so a reload\ncannot re-roll it and it can actually be honoured against a booking.",
+      "item": [
+        {
+          "name": "My perk",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/perks/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "perks",
+                "me"
+              ]
+            },
+            "description": "The gift on this account, or an explicit `null` for an account that\nhas none. Having no gift is not an error."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Same gift the sign-up drew, still unrevealed\", function () {",
+                  "  pm.expect(d.label).to.eql(pm.collectionVariables.get(\"perkLabel\"));",
+                  "  pm.expect(d.revealedAt).to.be.null;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reveal my perk",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/perks/me/reveal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "perks",
+                "me",
+                "reveal"
+              ]
+            },
+            "description": "Called by the sign-in page once the scratch card has been scratched\nthrough, so the reveal survives a reload. First reveal wins — the\ntimestamp records when the card was scratched and a repeat call\nleaves it alone."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Reveal was recorded\", function () {",
+                  "  pm.expect(d.revealedAt).to.be.a(\"number\");",
+                  "  pm.expect(d.label).to.eql(pm.collectionVariables.get(\"perkLabel\"));",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"perkRevealedAt\", d.revealedAt);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My perk, after the reveal",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/perks/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "perks",
+                "me"
+              ]
+            },
+            "description": "Shows the reveal persisted rather than living in the page's state."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Reveal survived the round trip\", function () {",
+                  "  pm.expect(pm.response.json().data.revealedAt)",
+                  "    .to.eql(Number(pm.collectionVariables.get(\"perkRevealedAt\")));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Perk catalogue",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/perks/catalogue",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "perks",
+                "catalogue"
+              ]
+            },
+            "description": "Public. Lists what can come up — deliberately **not** the odds, so\nthe weights stay server-side."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Every entry describes itself\", function () {",
+                  "  pm.expect(d).to.be.an(\"array\").and.not.empty;",
+                  "  d.forEach(function (p) {",
+                  "    pm.expect(p).to.have.all.keys(\"key\", \"label\", \"description\");",
+                  "  });",
+                  "});",
+                  "",
+                  "pm.test(\"Odds are not published\", function () {",
+                  "  d.forEach(function (p) {",
+                  "    pm.expect(p, \"weight must stay server-side\").to.not.have.property(\"weight\");",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 · Content",
+      "description": "Everything the pages render. All public — no page's content is behind a\nsign-in.\n\nEach response carries a `navigation` block derived from the catalogue, so\nadding a service does not mean editing the header links on seven pages.",
+      "item": [
+        {
+          "name": "Landing page",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/home",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "home"
+              ]
+            },
+            "description": "One round trip for the whole landing page: the service cards, the\nfeatured-events strip, the category marquee, the testimonial rail\nand the four count-up stats.\n\nThe shape here is mirrored by `frontend/app/content-fallback.js`,\nwhich the page renders from when the API is unreachable — change one\nand change the other."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Cacheable at the edge\", function () {",
+                  "  pm.response.to.have.header(\"cache-control\");",
+                  "  pm.expect(pm.response.headers.get(\"cache-control\")).to.include(\"s-maxage\");",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Every section the page needs is present\", function () {",
+                  "  pm.expect(d.services).to.be.an(\"array\").and.have.lengthOf(6);",
+                  "  pm.expect(d.featuredEvents).to.be.an(\"array\").and.not.empty;",
+                  "  pm.expect(d.categories).to.be.an(\"array\").and.not.empty;",
+                  "  pm.expect(d.testimonials).to.be.an(\"array\").and.not.empty;",
+                  "  pm.expect(d.stats).to.be.an(\"array\").and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test(\"A service card has what it renders\", function () {",
+                  "  const s = d.services[0];",
+                  "  pm.expect(s).to.include.keys(\"slug\", \"no\", \"title\", \"blurb\", \"price\", \"image\", \"iconKey\", \"href\");",
+                  "  pm.expect(s.price.label).to.be.a(\"string\");",
+                  "  pm.expect(s.image.path).to.match(/^\\/assets\\//);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Service catalogue",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/services",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "services"
+              ]
+            },
+            "description": "The six services plus the nav and menu links every page paints."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Catalogue and navigation travel together\", function () {",
+                  "  pm.expect(d.services).to.have.lengthOf(6);",
+                  "  pm.expect(d.navigation.services).to.have.lengthOf(6);",
+                  "  // Home, the six services, and Reviews.",
+                  "  pm.expect(d.navigation.menu).to.have.lengthOf(8);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Service detail",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/services/{{serviceSlug}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "services",
+                "{{serviceSlug}}"
+              ]
+            },
+            "description": "One service page: the catalogue row, its `pricing` block and a\n`blocks` map grouped by kind (`intro`, `faq`, `step`, `kit`,\n`polaroid`, `frame`, `card`, `marquee`, `included`).\n\nShapes differ per service — a rentals item carries a quantity step,\na photo pack carries a duration — so a block is stored as JSONB and\n`pricing.model` says which calculator to expect: `items`,\n`performers`, `hourly` or `packs`.\n\nChange `serviceSlug` to any of: `party-rentals`, `entertainers`,\n`dj-music`, `photo-video`, `virtual-tours`, `drone-video`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "const slug = pm.collectionVariables.get(\"serviceSlug\");",
+                  "",
+                  "pm.test(\"Is the service that was asked for\", function () {",
+                  "  pm.expect(d.slug).to.eql(slug);",
+                  "});",
+                  "",
+                  "pm.test(\"Carries a calculator the page knows how to render\", function () {",
+                  "  pm.expect(d.pricing, \"every service page has a calculator\").to.not.be.null;",
+                  "  pm.expect(d.pricing.model).to.be.oneOf([\"items\", \"performers\", \"hourly\", \"packs\"]);",
+                  "});",
+                  "",
+                  "pm.test(\"Blocks are grouped by kind\", function () {",
+                  "  pm.expect(d.blocks).to.be.an(\"object\");",
+                  "  pm.expect(d.blocks.intro).to.be.an(\"array\").and.not.empty;",
+                  "  pm.expect(d.blocks.faq).to.be.an(\"array\").and.not.empty;",
+                  "  d.blocks.faq.forEach(function (f) {",
+                  "    pm.expect(f).to.have.all.keys(\"question\", \"answer\");",
+                  "  });",
+                  "});",
+                  "",
+                  "pm.test(\"Navigation flags this page as the current one\", function () {",
+                  "  const current = d.navigation.menu.filter(function (m) { return m.isCurrent; });",
+                  "  pm.expect(current).to.have.lengthOf(1);",
+                  "  pm.expect(current[0].href).to.eql(\"/services/\" + slug);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reviews page",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/reviews",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "reviews"
+              ]
+            },
+            "description": "The review wall, its spotlight carousel, the star histogram, the\ncount-up stats, the photo marquee and the filter chips.\n\nThe histogram and the average are computed from the published rows\nrather than stored, so the summary cannot end up disagreeing with\nthe wall underneath it. The filter chips are derived from the\ncatalogue, so a new service gains a filter for free."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Histogram agrees with the wall it summarises\", function () {",
+                  "  pm.expect(d.summary.histogram).to.have.lengthOf(5);",
+                  "  const counted = d.summary.histogram.reduce(function (n, row) { return n + row.count; }, 0);",
+                  "  pm.expect(counted, \"buckets must add up to the total\").to.eql(d.summary.total);",
+                  "  pm.expect(d.summary.total).to.eql(d.reviews.length);",
+                  "  d.summary.histogram.forEach(function (row) {",
+                  "    pm.expect(row.percent).to.be.at.least(0).and.at.most(100);",
+                  "  });",
+                  "});",
+                  "",
+                  "pm.test(\"Average is inside the star range\", function () {",
+                  "  pm.expect(d.summary.average).to.be.at.least(1).and.at.most(5);",
+                  "});",
+                  "",
+                  "pm.test(\"Spotlight entries are rows on the wall, flagged\", function () {",
+                  "  pm.expect(d.spotlight).to.be.an(\"array\").and.not.empty;",
+                  "  const ids = d.reviews.map(function (r) { return r.id; });",
+                  "  d.spotlight.forEach(function (s) {",
+                  "    pm.expect(ids, \"a spotlight entry must not be a duplicate row\").to.include(s.id);",
+                  "    pm.expect(s.quote).to.be.a(\"string\").and.not.empty;",
+                  "  });",
+                  "});",
+                  "",
+                  "pm.test(\"Filter chips come from the catalogue\", function () {",
+                  "  pm.expect(d.filters[0].key).to.eql(\"all\");",
+                  "  pm.expect(d.filters).to.have.lengthOf(7);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Legal documents",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/legal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "legal"
+              ]
+            },
+            "description": "What documents exist."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Privacy and terms are both published\", function () {",
+                  "  const slugs = pm.response.json().data.map(function (d) { return d.slug; });",
+                  "  pm.expect(slugs).to.include.members([\"privacy\", \"terms\"]);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Legal document",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/legal/{{legalSlug}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "legal",
+                "{{legalSlug}}"
+              ]
+            },
+            "description": "Sections in document order. The body is a small closed block model,\nnot HTML: serving markup would mean the frontend either trusting it\nwith `dangerouslySetInnerHTML` or parsing it, and neither is worth\nit for copy this structured.\n\nA block is a paragraph (`p`) or a list (`ul`); its content is a run\nof inline pieces — `{ text }` for copy and `{ text, href }` for a\nlink — so a sentence with a link in the middle keeps its spacing.\n\nSet `legalSlug` to `privacy` or `terms`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Is the document that was asked for\", function () {",
+                  "  pm.expect(d.slug).to.eql(pm.collectionVariables.get(\"legalSlug\"));",
+                  "  pm.expect(d.title).to.be.a(\"string\").and.not.empty;",
+                  "  pm.expect(d.updatedLabel).to.be.a(\"string\").and.not.empty;",
+                  "});",
+                  "",
+                  "pm.test(\"Sections are renderable blocks, not markup\", function () {",
+                  "  pm.expect(d.sections).to.be.an(\"array\").and.not.empty;",
+                  "  d.sections.forEach(function (s) {",
+                  "    pm.expect(s).to.include.keys(\"id\", \"title\", \"blocks\");",
+                  "    s.blocks.forEach(function (b) {",
+                  "      pm.expect(b.type).to.be.oneOf([\"p\", \"ul\"]);",
+                  "    });",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tap a star",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/reviews/pulse",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "reviews",
+                "pulse"
+              ]
+            },
+            "description": "The rating widget at the foot of the reviews page. Needs no\naccount — a token is used if one is sent, and not required, because\nthe widget is offered to every visitor.\n\nRecorded as a *pulse* rather than a review: there is no body, no\nname and no moderation, so it is kept apart from the published wall\nand never moves the page's average.\n\nLimited to 10 a minute per address.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"stars\": 5\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"201 Created\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Counted\", function () {",
+                  "  pm.expect(d.stars).to.eql(5);",
+                  "  pm.expect(d.total).to.be.at.least(1);",
+                  "  pm.expect(d.average).to.be.at.least(1).and.at.most(5);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 · Quote requests",
+      "description": "The \"one request, whole event covered\" enquiry that every service page's\ncalculator ends in.\n\nSubmitting is open to visitors — requiring an account first would lose the\nenquiry. A token is attached to the row when one is sent, which is what\nmakes `/mine` possible.\n\nLimited to 6 submissions per 5 minutes per address.",
+      "item": [
+        {
+          "name": "Submit a quote request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "requests"
+              ]
+            },
+            "description": "The total is **recomputed from the line items**, not taken from the\nclient. The page shows a running total, but a number posted from a\nbrowser decides nothing about what an event costs — note that the\nbody below sends no total at all.\n\nThe reference (`EM-8F3K2Q`) is drawn from an alphabet with no\nI/O/0/1, so it can be read out over the phone without ambiguity.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Riya Sharma\",\n  \"email\": \"riya@example.com\",\n  \"phone\": \"+1 919 555 0134\",\n  \"eventDate\": \"2026-10-03\",\n  \"serviceSlug\": \"party-rentals\",\n  \"lineItems\": [\n    {\n      \"key\": \"chair\",\n      \"label\": \"Folding chair\",\n      \"quantity\": 40,\n      \"unitCents\": 175\n    },\n    {\n      \"key\": \"table\",\n      \"label\": \"Round table\",\n      \"quantity\": 5,\n      \"unitCents\": 950\n    }\n  ],\n  \"notes\": \"Backyard, 40 guests, setup from 2pm.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"201 Created\", function () {",
+                  "  pm.response.to.have.status(201);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Has a reference that can be read out loud\", function () {",
+                  "  pm.expect(d.reference).to.match(/^EM-[A-HJ-NP-Z2-9]{6}$/);",
+                  "});",
+                  "",
+                  "pm.test(\"Server computed the total, not the client\", function () {",
+                  "  // 40 chairs at $1.75 plus 5 tables at $9.50.",
+                  "  pm.expect(d.totalCents).to.eql(40 * 175 + 5 * 950);",
+                  "  pm.expect(d.totalLabel).to.eql(\"$117.50\");",
+                  "  pm.expect(d.lineItems[0].lineLabel).to.eql(\"$70.00\");",
+                  "});",
+                  "",
+                  "pm.test(\"Starts as new work for a coordinator\", function () {",
+                  "  pm.expect(d.status).to.eql(\"new\");",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"quoteReference\", d.reference);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "My quote requests",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/requests/mine",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "requests",
+                "mine"
+              ]
+            },
+            "description": "The enquiries on this account, newest first. Needs a bearer token —\nthe request above was attached to the account because the\ncollection sent one."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Includes the request just submitted\", function () {",
+                  "  const refs = d.map(function (r) { return r.reference; });",
+                  "  pm.expect(refs).to.include(pm.collectionVariables.get(\"quoteReference\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 · Auth — sign in again",
+      "description": "The sign-in half, on the account *01* created.\n\nSame two steps as sign-up, and the same rule: the password gets you a code,\nnot a session.",
+      "item": [
+        {
+          "name": "Sign in",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/signin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signin"
+              ]
+            },
+            "description": "`rememberMe` extends only the refresh token — the access token's\nlifetime never changes, because it is the one held in browser\nstorage.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"rememberMe\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"A verified account signs in, not up\", function () {",
+                  "  pm.expect(d.status).to.eql(\"otp_required\");",
+                  "  pm.expect(d.purpose).to.eql(\"signin\");",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"otpCode\", d.devCode);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resend the code too soon",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/otp/resend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "otp",
+                "resend"
+              ]
+            },
+            "description": "Expected to fail with **429**. The request above sent a code\nmoments ago and the cooldown is 30 seconds, so this pins down the\ncooldown rather than the happy path.\n\n`details.retryAfterSeconds` is what the sign-in page reads to\nrestart its countdown instead of leaving the link clickable.\n\nIssuing a code supersedes any live one for that address, so a\nsuccessful resend also stops the previous code working.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"429 Too Many Requests\", function () {",
+                  "  pm.response.to.have.status(429);",
+                  "});",
+                  "",
+                  "const err = pm.response.json().error;",
+                  "",
+                  "pm.test(\"Says how long to wait\", function () {",
+                  "  pm.expect(err.code).to.eql(\"too_many_requests\");",
+                  "  pm.expect(err.details.retryAfterSeconds).to.be.above(0).and.at.most(30);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify the code (sign-in)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/otp/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "otp",
+                "verify"
+              ]
+            },
+            "description": "Same endpoint as the sign-up verification, different outcome: **no\nperk**. The welcome gift belongs to the sign-up path only, and the\nchallenge's `purpose` is what decides.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"{{otpCode}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Returns a session\", function () {",
+                  "  pm.expect(d.accessToken).to.be.a(\"string\");",
+                  "  pm.expect(d.refreshToken).to.be.a(\"string\");",
+                  "});",
+                  "",
+                  "pm.test(\"No second welcome gift\", function () {",
+                  "  pm.expect(d, \"the perk belongs to the sign-up path only\").to.not.have.property(\"perk\");",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"accessToken\", d.accessToken);",
+                  "pm.collectionVariables.set(\"refreshToken\", d.refreshToken);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 · Auth — sign out",
+      "description": "Signing out revokes the `sessions` row the refresh token names, which is\nthe only thing that can actually invalidate a token this API has already\nhanded out.",
+      "item": [
+        {
+          "name": "Sign out",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/signout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signout"
+              ]
+            },
+            "description": "Takes either credential: a refresh token names one session to close,\nand an access token alone closes every session on the account.\nSending neither is the one case that cannot do anything, and answers\n**400**.\n\nAnswers the same whether or not the session was still live — signing\nout twice is not an error worth reporting.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Signed out\", function () {",
+                  "  pm.expect(pm.response.json().data.status).to.eql(\"signed_out\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh after signing out",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Expected to fail with **401**. The refresh token is still a valid,\nunexpired JWT — but its session row is revoked, and the row is what\ndecides.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401 Unauthorized\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Session is gone server-side\", function () {",
+                  "  pm.expect(pm.response.json().error.code).to.eql(\"unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 · Password reset",
+      "description": "**Nothing here reveals whether an address is registered.** `forgot` always\nanswers 202; the only difference between a known and an unknown address is\nwhether a token was actually created, which the caller cannot see (outside\ndevelopment, where `devToken` is echoed so the flow is testable).\n\nCompleting a reset ends every session on the account: if the reset was\nneeded because someone else had the old password, their session goes with\nit.",
+      "item": [
+        {
+          "name": "Forgot password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/password/forgot",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "password",
+                "forgot"
+              ]
+            },
+            "description": "**202** Accepted. Asking for a second link invalidates the first, so\na forwarded old email cannot be used later.\n\nThe token is stored only as a SHA-256 digest, so a leaked database\ncannot be used to complete the reset.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"202 Accepted\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "});",
+                  "",
+                  "const d = pm.response.json().data;",
+                  "",
+                  "pm.test(\"Reports sent\", function () {",
+                  "  pm.expect(d.status).to.eql(\"sent\");",
+                  "});",
+                  "",
+                  "pm.test(\"Development build echoes the token back\", function () {",
+                  "  pm.expect(d.devToken, \"set EXPOSE_DEV_CODES=true on the API\").to.be.a(\"string\").and.not.empty;",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"resetToken\", d.devToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Forgot password for an unknown address",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/password/forgot",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "password",
+                "forgot"
+              ]
+            },
+            "description": "Also **202**, and that is the point — the status and the envelope are\nidentical to the request above, so the endpoint cannot be used to\nfind out which addresses have accounts.\n\nThe one observable difference is a development-only convenience: no\n`devToken`, because no reset was created.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nobody@example.com\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"202 Accepted, exactly like a known address\", function () {",
+                  "  pm.response.to.have.status(202);",
+                  "  pm.expect(pm.response.json().data.status).to.eql(\"sent\");",
+                  "});",
+                  "",
+                  "pm.test(\"No token, because no reset was created\", function () {",
+                  "  pm.expect(pm.response.json().data).to.not.have.property(\"devToken\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reset the password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/password/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "password",
+                "reset"
+              ]
+            },
+            "description": "Consumes the token — it is single-use — writes the new hash and\nrevokes every session on the account.\n\nThe test below swaps `password` for `newPassword` in the collection\nvariables, so the two requests after this one exercise the change.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"password\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"Reset\", function () {",
+                  "  pm.expect(pm.response.json().data.status).to.eql(\"reset\");",
+                  "});",
+                  "",
+                  "// Keep the old one so the next-but-one request can prove it stopped",
+                  "// working, and make the new one the account's password from here on.",
+                  "pm.collectionVariables.set(\"oldPassword\", pm.collectionVariables.get(\"password\"));",
+                  "pm.collectionVariables.set(\"password\", pm.collectionVariables.get(\"newPassword\"));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sign in with the new password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/signin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signin"
+              ]
+            },
+            "description": "Proves the reset took effect.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"200 OK\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "",
+                  "pm.test(\"New password is accepted\", function () {",
+                  "  pm.expect(pm.response.json().data.status).to.eql(\"otp_required\");",
+                  "});",
+                  "",
+                  "pm.collectionVariables.set(\"otpCode\", pm.response.json().data.devCode);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sign in with the old password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/signin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signin"
+              ]
+            },
+            "description": "Expected to fail with **401**. Proves the old password is dead.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{oldPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401 Unauthorized\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Old password no longer works\", function () {",
+                  "  pm.expect(pm.response.json().error.code).to.eql(\"invalid_credentials\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "08 · Error cases",
+      "description": "Every request in this folder is **expected to fail**, and each one pins down\na decision rather than just poking at the API.\n\nFailure is always `{ \"error\": { \"code\", \"message\", \"details\"? } }`.\n`message` is written to be shown to a user as-is. `details` carries either a\nlist of field errors — `[{ \"field\", \"message\" }]`, which the sign-in form\npaints onto its inputs — or an object such as\n`{ \"retryAfterSeconds\": 29 }`.\n\nRun this folder after *07*: two of the requests rely on the live one-time\ncode challenge that *07* left behind.",
+      "item": [
+        {
+          "name": "Sign up with an invalid form",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/signup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signup"
+              ]
+            },
+            "description": "**422** with one message per field, which is the shape the sign-in\nform paints onto its inputs. One field can raise several issues\n(too short *and* missing a digit), so only the first survives — the\nform shows one message per input.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"A\",\n  \"email\": \"not-an-email\",\n  \"password\": \"short\",\n  \"acceptTos\": false\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"422 Unprocessable Entity\", function () {",
+                  "  pm.response.to.have.status(422);",
+                  "});",
+                  "",
+                  "const err = pm.response.json().error;",
+                  "",
+                  "pm.test(\"Reports every bad field, once each\", function () {",
+                  "  pm.expect(err.code).to.eql(\"validation_failed\");",
+                  "  const fields = err.details.map(function (d) { return d.field; });",
+                  "  pm.expect(fields).to.include.members([\"fullName\", \"email\", \"password\", \"acceptTos\"]);",
+                  "  pm.expect(fields).to.have.lengthOf(new Set(fields).size, \"one message per field\");",
+                  "});",
+                  "",
+                  "pm.test(\"Every message is fit to show a user\", function () {",
+                  "  err.details.forEach(function (d) {",
+                  "    pm.expect(d.message).to.be.a(\"string\").and.not.empty;",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sign in with a wrong password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/signin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signin"
+              ]
+            },
+            "description": "**401**. Note there is no per-field detail here: telling the caller\n*which* half was wrong is exactly what must not happen.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"definitely-not-it-9\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401 Unauthorized\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "const err = pm.response.json().error;",
+                  "",
+                  "pm.test(\"Does not say which half was wrong\", function () {",
+                  "  pm.expect(err.code).to.eql(\"invalid_credentials\");",
+                  "  pm.expect(err).to.not.have.property(\"details\");",
+                  "});",
+                  "",
+                  "// The next request compares against this, byte for byte.",
+                  "pm.collectionVariables.set(\"invalidCredentialsMessage\", err.message);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sign in with an unknown address",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/signin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signin"
+              ]
+            },
+            "description": "**401**, with a code and message *identical* to the wrong-password\ncase above — the test asserts they match exactly. That is what stops\nthis endpoint being used to find out which addresses have accounts.\n\nThe timing matches too: when the address is unknown the API still\nverifies the password against a throwaway hash, so the reply costs\nthe same either way and cannot be told apart by how long it took.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"nobody@example.com\",\n  \"password\": \"definitely-not-it-9\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401 Unauthorized\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "const err = pm.response.json().error;",
+                  "",
+                  "pm.test(\"Answers identically to a wrong password\", function () {",
+                  "  pm.expect(err.code).to.eql(\"invalid_credentials\");",
+                  "  pm.expect(err.message, \"an unknown address must be indistinguishable\")",
+                  "    .to.eql(pm.collectionVariables.get(\"invalidCredentialsMessage\"));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify a wrong code",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/otp/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "otp",
+                "verify"
+              ]
+            },
+            "description": "**401**, counting down the attempts left. The row is locked\n`FOR UPDATE` for the duration of the transaction, so two verify\nrequests arriving together cannot both read the same attempt count\nand both be allowed a guess.\n\nUses the challenge left behind by *07 · Sign in with the new\npassword*. A wrong guess burns an attempt, not the challenge.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"code\": \"000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401 Unauthorized\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "const err = pm.response.json().error;",
+                  "",
+                  "pm.test(\"Says how many tries are left\", function () {",
+                  "  pm.expect(err.code).to.eql(\"unauthorized\");",
+                  "  pm.expect(err.message).to.match(/tr(y|ies) left|Request a new one/);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "An access token where a refresh token is expected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "**401**. Both tokens are signed by this service, so the signature\ncheck alone would pass — the `typ` claim is what stops a short-lived\naccess token being spent as a long-lived refresh token.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{accessToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401 Unauthorized\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Token kind is checked, not just the signature\", function () {",
+                  "  pm.expect(pm.response.json().error.code).to.eql(\"unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A perk without a token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/perks/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "perks",
+                "me"
+              ]
+            },
+            "description": "**401**. One of the three endpoints that need an identity, because\nthey would have nothing to return without one. Nothing else in the\nAPI is gated: `resolveAuth` runs on every request and never rejects,\nso a stale token in browser storage cannot make a public page fail.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"401 Unauthorized\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "",
+                  "pm.test(\"Asks the caller to sign in\", function () {",
+                  "  pm.expect(pm.response.json().error.code).to.eql(\"unauthorized\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "An unknown service slug",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/services/no-such-service",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "services",
+                "no-such-service"
+              ]
+            },
+            "description": "**404**, naming what was not found."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404 Not Found\", function () {",
+                  "  pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Names what was missing\", function () {",
+                  "  const err = pm.response.json().error;",
+                  "  pm.expect(err.code).to.eql(\"not_found\");",
+                  "  pm.expect(err.message).to.include(\"no-such-service\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A badly shaped slug",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/content/services/Not_A_Slug!",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "content",
+                "services",
+                "Not_A_Slug!"
+              ]
+            },
+            "description": "**422** rather than 404: the path never reaches a lookup, because a\nslug has to be lowercase words joined by single hyphens."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"422 Unprocessable Entity\", function () {",
+                  "  pm.response.to.have.status(422);",
+                  "});",
+                  "",
+                  "pm.test(\"Rejected before any lookup\", function () {",
+                  "  pm.expect(pm.response.json().error.code).to.eql(\"validation_failed\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "An empty quote request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "requests"
+              ]
+            },
+            "description": "**400**. An enquiry with neither a line item nor a note gives a\ncoordinator nothing to answer.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Riya Sharma\",\n  \"email\": \"riya@example.com\",\n  \"lineItems\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 Bad Request\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"Asks for something to act on\", function () {",
+                  "  pm.expect(pm.response.json().error.code).to.eql(\"bad_request\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A malformed JSON body",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "content-type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "requests"
+              ]
+            },
+            "description": "**400**. The body parser rejects this before any handler runs; the\nerror middleware translates the parser's `SyntaxError` into the same\nenvelope as everything else, so a client never has to special-case\nit.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"fullName\": \"Riya\", oops",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"400 Bad Request\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "",
+                  "pm.test(\"Reported in the same envelope as everything else\", function () {",
+                  "  const err = pm.response.json().error;",
+                  "  pm.expect(err.code).to.eql(\"bad_request\");",
+                  "  pm.expect(err.message).to.include(\"JSON\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "An unknown route",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/there-is-no-such-thing",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "there-is-no-such-thing"
+              ]
+            },
+            "description": "**404**, naming the method and path so a typo is obvious."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"404 Not Found\", function () {",
+                  "  pm.response.to.have.status(404);",
+                  "});",
+                  "",
+                  "pm.test(\"Names the route\", function () {",
+                  "  const err = pm.response.json().error;",
+                  "  pm.expect(err.code).to.eql(\"not_found\");",
+                  "  pm.expect(err.message).to.include(\"/api/v1/there-is-no-such-thing\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
