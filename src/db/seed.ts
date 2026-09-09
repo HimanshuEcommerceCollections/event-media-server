@@ -21,6 +21,9 @@ import { SERVICES } from "./seed-data/services.js";
 import { CATEGORIES, FEATURED_EVENTS, HOME_STATS, REVIEW_STATS, TESTIMONIALS } from "./seed-data/home.js";
 import { REVIEWS, REVIEW_MARQUEE } from "./seed-data/reviews.js";
 import { LEGAL_DOCUMENTS } from "./seed-data/legal.js";
+import { PAGES } from "./seed-data/pages.js";
+import { BUNDLES } from "./seed-data/bundles.js";
+import { invalidateCatalogue } from "../modules/pricing/pricing.catalogue.js";
 
 export async function seedContent(): Promise<void> {
   await withTransaction(async (tx) => {
@@ -28,11 +31,18 @@ export async function seedContent(): Promise<void> {
     await seedHome(tx);
     await seedReviews(tx);
     await seedLegal(tx);
+    await seedPages(tx);
+    await seedBundles(tx);
   });
+  // The engine caches the catalogue, and the seed has just rewritten the rows
+  // it caches. Without this the next booking would price against the old ones.
+  invalidateCatalogue();
   logger.info("content seeded", {
     services: SERVICES.length,
     reviews: REVIEWS.length,
     documents: LEGAL_DOCUMENTS.length,
+    pages: PAGES.length,
+    bundles: BUNDLES.length,
   });
 }
 
@@ -260,6 +270,74 @@ async function seedLegal(tx: Tx): Promise<void> {
         nowSeconds(),
       ],
     );
+  }
+}
+
+/* --------------------------------------------------------- pages + bundles */
+
+async function seedPages(tx: Tx): Promise<void> {
+  for (const page of PAGES) {
+    await tx.execute(
+      `INSERT INTO content_pages (slug, title, kicker, summary, hero, sections, updated_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)
+       ON CONFLICT (slug) DO UPDATE SET
+         title = EXCLUDED.title, kicker = EXCLUDED.kicker, summary = EXCLUDED.summary,
+         hero = EXCLUDED.hero, sections = EXCLUDED.sections,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        page.slug,
+        page.title,
+        page.kicker,
+        page.summary,
+        JSON.stringify(page.hero),
+        JSON.stringify(page.sections),
+        nowSeconds(),
+      ],
+    );
+  }
+}
+
+async function seedBundles(tx: Tx): Promise<void> {
+  for (const [index, bundle] of BUNDLES.entries()) {
+    await tx.execute(
+      `INSERT INTO bundles
+         (slug, name, tagline, blurb, event_type, badge, image_path, image_alt, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (slug) DO UPDATE SET
+         name = EXCLUDED.name, tagline = EXCLUDED.tagline, blurb = EXCLUDED.blurb,
+         event_type = EXCLUDED.event_type, badge = EXCLUDED.badge,
+         image_path = EXCLUDED.image_path, image_alt = EXCLUDED.image_alt,
+         sort_order = EXCLUDED.sort_order, is_active = TRUE`,
+      [
+        bundle.slug,
+        bundle.name,
+        bundle.tagline,
+        bundle.blurb,
+        bundle.eventType,
+        bundle.badge,
+        bundle.imagePath,
+        bundle.imageAlt,
+        index,
+      ],
+    );
+
+    // Items have no natural key beyond their place in the bundle, so the set
+    // is replaced rather than upserted row by row — which is also what drops
+    // a line removed from the seed.
+    await tx.execute("DELETE FROM bundle_items WHERE bundle_slug = $1", [bundle.slug]);
+    for (const [itemIndex, item] of bundle.items.entries()) {
+      await tx.execute(
+        `INSERT INTO bundle_items (id, bundle_slug, service_slug, configuration, sort_order)
+         VALUES ($1,$2,$3,$4::jsonb,$5)`,
+        [
+          `bit_${bundle.slug}_${item.serviceSlug}`,
+          bundle.slug,
+          item.serviceSlug,
+          JSON.stringify(item.configuration),
+          itemIndex,
+        ],
+      );
+    }
   }
 }
 
