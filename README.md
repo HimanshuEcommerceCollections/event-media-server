@@ -118,6 +118,11 @@ could be honoured against a booking.
 | GET    | `/api/v1/content/reviews`         |
 | GET    | `/api/v1/content/legal`           |
 | GET    | `/api/v1/content/legal/:slug`     |
+| GET    | `/api/v1/content/pages`           |
+| GET    | `/api/v1/content/pages/:slug`     |
+| GET    | `/api/v1/content/commercial`      |
+| GET    | `/api/v1/content/bundles`         |
+| GET    | `/api/v1/content/bundles/:slug`   |
 | POST   | `/api/v1/content/reviews/pulse`   |
 
 A service detail response carries the catalogue row, its `pricing` block and a
@@ -131,15 +136,84 @@ Every content response also carries `navigation`, the header dropdown and
 overlay menu links derived from the catalogue, so adding a service does not
 mean editing seven pages.
 
-### Quote requests
+`/api/v1/content/pages/:slug` serves the narrative pages — `how-it-works`,
+`about`, `faq`, `commercial`, `pricing`, `build` — as `{ kind, payload }`
+sections in document order, the same convention the legal documents use.
 
-| Method | Path                      | Notes                                      |
-| ------ | ------------------------- | ------------------------------------------ |
-| POST   | `/api/v1/requests`        | Open to visitors; a token is attached if sent |
-| GET    | `/api/v1/requests/mine`   | Bearer token                                |
+`/api/v1/content/commercial` is the B2B surface in one call: the page copy plus
+every service flagged `is_b2b` with its pricing model attached.
 
-The total is recomputed from the line items. The page shows a running total,
-but a number posted from a browser decides nothing about what an event costs.
+### Pricing
+
+| Method | Path                        | Notes                                        |
+| ------ | --------------------------- | -------------------------------------------- |
+| GET    | `/api/v1/pricing`           | The `pricing.v1` document `/pricing` renders  |
+| GET    | `/api/v1/pricing/builder`   | Six configurators + the builder enums, one call |
+| GET    | `/api/v1/pricing/:slug`     | One service model                            |
+
+There is one set of prices. The service pages render it, `/pricing`
+transcludes it and the builder prices against it — all from the `pricing`
+block on each service row. A second copy of the numbers is the thing that goes
+stale, so there is no second copy; `fromCents` on the pricing document is
+computed from the model rather than authored.
+
+`/api/v1/pricing/builder` also carries the three enums the builder needs, with
+the large-event rule marked on them: `eventTypes` (wedding is `alwaysLarge`),
+`headcountBands` (`100+` is `large`) and `budgetBands`.
+
+### Event booking requests
+
+The core flow. One request carries the event and up to six configured
+services.
+
+| Method | Path                             | Notes                                       |
+| ------ | -------------------------------- | ------------------------------------------- |
+| POST   | `/api/v1/bookings/quote`         | Prices a package, stores nothing            |
+| POST   | `/api/v1/bookings`               | Open to visitors; a token is attached if sent |
+| GET    | `/api/v1/bookings/mine`          | Bearer token                                |
+| GET    | `/api/v1/bookings/:reference`    | The success page, reloadable                |
+
+**No price is accepted from the client.** A line is `{ serviceType,
+configuration }` and every figure is read from the catalogue here, so the
+running total the page shows can be checked rather than trusted. Sending a
+price field is a 422 — there is nowhere to put it.
+
+`clientTotal` is optional and advisory: send what the page had on screen and a
+disagreement is rejected with both numbers, so a stale total becomes a caught
+error rather than a wrong quote in the inbox.
+
+`largeEventFlag` is derived on the server from the event type and the headcount
+band — a wedding, or 100+ guests — never accepted from the client, so the
+coordinator caveat cannot be skipped by a page that forgot to send it.
+
+References are `EVM-2026-0001`: sequential per year, minted from an atomic
+counter rather than a random string. Vendor applications use `EVV-` on the
+same counter.
+
+### Vendor applications
+
+| Method | Path                                     | Notes                          |
+| ------ | ---------------------------------------- | ------------------------------ |
+| GET    | `/api/v1/vendors/service-types`          | What can be applied for        |
+| POST   | `/api/v1/vendors/applications`           | Open to visitors               |
+| GET    | `/api/v1/vendors/applications/:reference`| The submitted application      |
+
+Applying for `drone-video` requires Part-107 details, and they are **collected,
+not validated** — nothing here checks a certificate against the FAA. The stored
+record and the response both carry `verified: false`, and no surface may
+present a submitted number as a certification. Part-107 details sent by an
+applicant who is not applying to fly are dropped rather than stored.
+
+### Analytics
+
+| Method | Path                        | Notes                             |
+| ------ | --------------------------- | --------------------------------- |
+| POST   | `/api/v1/analytics/events`  | Batch of up to 20; answers 204     |
+
+Stubbed by design: `build_add_service` and `build_total_view` are stored so the
+funnel can be counted later, and nothing reads them yet. Only those two names
+are accepted, so a page cannot turn this into a general-purpose log. A failed
+write is swallowed rather than failing the beacon that carried it.
 
 ### Health
 
@@ -173,8 +247,11 @@ src/
   modules/
     auth/             routes → service → repo
     perks/
-    content/
-    requests/
+    content/          pages, services, reviews, legal, bundles
+    pricing/          the catalogue, the engine, the published document
+    bookings/         the core flow: one request, N configured services
+    vendors/          Become a Vendor
+    analytics/        the two stubbed builder events
 ```
 
 Each module is a router, a service holding the decisions and a repo holding the
@@ -196,6 +273,20 @@ queries and a column rename touches one file.
 - **The rate limiter is in-process.** Enough to blunt a password-guessing loop
   from one address; a shared store (Redis) is the replacement once more than
   one instance runs.
+- **The client never sends a price.** The builder posts what was chosen and the
+  engine prices it from the catalogue. This is what makes "a stale total is a
+  defect" checkable: the total can be recomputed, so a disagreement is an error
+  rather than a wrong quote nobody notices.
+- **The pricing catalogue is cached in memory.** It changes when the seed runs,
+  not per request, and pricing a six-service package would otherwise be six
+  round trips on the one page the site is built around. `npm run seed`
+  invalidates it.
+- **Bundles store no total.** A package costs whatever its lines price to,
+  computed on read through the same engine a hand-configured tile uses, so a
+  bundle and the builder cannot disagree.
+- **Part-107 details are collected, never validated.** Nothing checks a
+  certificate against the FAA, so nothing may present one as a certification —
+  the column comment, the response field and this line all say so on purpose.
 
 ## Production
 
