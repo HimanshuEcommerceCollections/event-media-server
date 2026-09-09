@@ -174,3 +174,66 @@ export const findLegalDocument = (slug: string): Promise<LegalRow | null> =>
 
 export const listLegalSlugs = (): Promise<{ slug: string; title: string }[]> =>
   query<{ slug: string; title: string }>("SELECT slug, title FROM legal_documents ORDER BY slug");
+
+/* ------------------------------------------------------- pages and bundles */
+
+export type PageRow = {
+  slug: string;
+  title: string;
+  kicker: string;
+  summary: string;
+  hero: Record<string, unknown>;
+  sections: unknown[];
+  updated_at: number;
+};
+
+export type BundleRow = {
+  slug: string;
+  name: string;
+  tagline: string;
+  blurb: string;
+  event_type: string;
+  badge: string | null;
+  image_path: string | null;
+  image_alt: string | null;
+  sort_order: number;
+};
+
+export type BundleItemRow = {
+  bundle_slug: string;
+  service_slug: string;
+  configuration: Record<string, unknown>;
+  sort_order: number;
+};
+
+export const findPage = (slug: string): Promise<PageRow | null> =>
+  queryOne<PageRow>(
+    `SELECT slug, title, kicker, summary, hero, sections, updated_at
+       FROM content_pages WHERE slug = $1`,
+    [slug],
+  );
+
+export const listPageSlugs = (): Promise<{ slug: string; title: string; summary: string }[]> =>
+  query<{ slug: string; title: string; summary: string }>(
+    "SELECT slug, title, summary FROM content_pages ORDER BY slug",
+  );
+
+export const listBundles = (): Promise<BundleRow[]> =>
+  query<BundleRow>(
+    `SELECT slug, name, tagline, blurb, event_type, badge, image_path, image_alt, sort_order
+       FROM bundles WHERE is_active ORDER BY sort_order`,
+  );
+
+export const findBundle = (slug: string): Promise<BundleRow | null> =>
+  queryOne<BundleRow>(
+    `SELECT slug, name, tagline, blurb, event_type, badge, image_path, image_alt, sort_order
+       FROM bundles WHERE slug = $1 AND is_active`,
+    [slug],
+  );
+
+export const listBundleItems = (slug: string): Promise<BundleItemRow[]> =>
+  query<BundleItemRow>(
+    `SELECT bundle_slug, service_slug, configuration, sort_order
+       FROM bundle_items WHERE bundle_slug = $1 ORDER BY sort_order`,
+    [slug],
+  );

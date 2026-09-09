@@ -11,6 +11,7 @@ import { asyncHandler } from "../../lib/asyncHandler.js";
 import { ok } from "../../lib/http.js";
 import { validate } from "../../middleware/validate.js";
 import { rateLimit } from "../../middleware/rateLimit.js";
+import { cacheable } from "../../lib/cache.js";
 import * as service from "./content.service.js";
 import { recordRatingPulse } from "./ratings.service.js";
 
@@ -25,11 +26,6 @@ const slugParams = z.object({
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "That is not a valid slug.")
     .max(64),
 });
-
-const cacheable = (seconds: number) => (_req: unknown, res: { setHeader: (k: string, v: string) => void }, next: () => void) => {
-  res.setHeader("cache-control", `public, max-age=0, s-maxage=${seconds}, stale-while-revalidate=300`);
-  next();
-};
 
 contentRouter.get(
   "/home",
@@ -80,6 +76,55 @@ contentRouter.get(
   asyncHandler(async (req, res) => {
     const { slug } = req.validatedParams as { slug: string };
     ok(res, await service.getLegalDocument(slug));
+  }),
+);
+
+contentRouter.get(
+  "/pages",
+  cacheable(300),
+  asyncHandler(async (_req, res) => {
+    ok(res, await service.listPages());
+  }),
+);
+
+contentRouter.get(
+  "/pages/:slug",
+  cacheable(300),
+  validate(slugParams, "params"),
+  asyncHandler(async (req, res) => {
+    const { slug } = req.validatedParams as { slug: string };
+    ok(res, await service.getPage(slug));
+  }),
+);
+
+/**
+ * The B2B surface: the commercial page copy plus the two commercial-leaning
+ * services with their own pricing, so /commercial is one call.
+ */
+contentRouter.get(
+  "/commercial",
+  cacheable(300),
+  asyncHandler(async (_req, res) => {
+    ok(res, await service.getCommercialContent());
+  }),
+);
+
+contentRouter.get(
+  "/bundles",
+  cacheable(300),
+  asyncHandler(async (_req, res) => {
+    ok(res, await service.listBundles());
+  }),
+);
+
+/** The bundle-seed convention: everything /build needs to pre-tick its tiles. */
+contentRouter.get(
+  "/bundles/:slug",
+  cacheable(300),
+  validate(slugParams, "params"),
+  asyncHandler(async (req, res) => {
+    const { slug } = req.validatedParams as { slug: string };
+    ok(res, await service.getBundleSeed(slug));
   }),
 );
 

@@ -7,6 +7,8 @@
  */
 
 import { notFound } from "../../lib/http.js";
+import { loadCatalogue } from "../pricing/pricing.catalogue.js";
+import { money, pricePackage } from "../pricing/pricing.engine.js";
 import * as repo from "./content.repo.js";
 import type { ServiceBlockRow, ServiceRow } from "./content.repo.js";
 
@@ -166,6 +168,17 @@ function buildNavigation(services: ServiceRow[], currentHref: string | null) {
       ...services.map((s) => link(`/services/${s.slug}`, s.title, s.no)),
       link("/reviews", "Reviews", "→"),
     ],
+    // The site header, which is a shorter set than the full service menu: the
+    // builder is the call to action and the six services collapse behind one
+    // "Services" entry.
+    primary: [
+      link("/services", "Services", "01"),
+      link("/pricing", "Pricing", "02"),
+      link("/how-it-works", "How It Works", "03"),
+      link("/vendors/apply", "For Vendors", "04"),
+      link("/commercial", "Commercial", "05"),
+    ],
+    cta: link("/build", "Build My Event", "→"),
   };
 }
 
@@ -260,3 +273,113 @@ export async function getLegalDocument(slug: string) {
 }
 
 export const listLegalDocuments = () => repo.listLegalSlugs();
+
+/* --------------------------------------------------------------------- pages */
+
+export const listPages = () => repo.listPageSlugs();
+
+export async function getPage(slug: string) {
+  const [page, services] = await Promise.all([repo.findPage(slug), repo.listServices()]);
+  if (page === null) throw notFound(`No page called "${slug}".`);
+  return {
+    slug: page.slug,
+    title: page.title,
+    kicker: page.kicker,
+    summary: page.summary,
+    hero: page.hero,
+    sections: page.sections,
+    updatedAt: page.updated_at,
+    navigation: buildNavigation(services, `/${page.slug}`),
+  };
+}
+
+/**
+ * /commercial in one call: the B2B copy, and the commercial-leaning services
+ * with the pricing the page quotes. `is_b2b` decides which those are, so
+ * flagging a seventh service is all it takes to list it here.
+ */
+export async function getCommercialContent() {
+  const [page, services, catalogue] = await Promise.all([
+    repo.findPage("commercial"),
+    repo.listServices(),
+    loadCatalogue(),
+  ]);
+  if (page === null) throw notFound("The commercial page has not been seeded.");
+
+  const b2b = services.filter((s) => s.is_b2b);
+  return {
+    slug: page.slug,
+    title: page.title,
+    kicker: page.kicker,
+    summary: page.summary,
+    hero: page.hero,
+    sections: page.sections,
+    services: b2b.map((s) => ({
+      slug: s.slug,
+      title: s.title,
+      blurb: s.blurb,
+      priceLabel: s.price_label,
+      iconKey: s.icon_key,
+      href: `/services/${s.slug}`,
+      pricing: catalogue.get(s.slug)?.pricing ?? null,
+    })),
+    navigation: buildNavigation(services, "/commercial"),
+  };
+}
+
+/* ------------------------------------------------------------------ bundles */
+
+export async function listBundles() {
+  const bundles = await repo.listBundles();
+  return bundles.map(toBundleSummary);
+}
+
+/**
+ * The bundle-seed convention: the tiles to pre-tick, each with the same
+ * `configuration` shape the builder posts, and the total those lines price to.
+ * /packages may stub — the convention still works from anywhere.
+ */
+export async function getBundleSeed(slug: string) {
+  const bundle = await repo.findBundle(slug);
+  if (bundle === null) throw notFound(`No package called "${slug}".`);
+
+  const items = await repo.listBundleItems(slug);
+  const { lineItems, packageTotal } = await pricePackage(
+    items.map((item) => ({
+      serviceType: item.service_slug,
+      configuration: item.configuration,
+      bundleId: bundle.slug,
+    })),
+  );
+
+  return {
+    ...toBundleSummary(bundle),
+    seed: {
+      event: { type: bundle.event_type },
+      lineItems: lineItems.map((item) => ({
+        serviceType: item.serviceType,
+        configuration: item.configuration,
+        bundleId: bundle.slug,
+      })),
+    },
+    lineItems: lineItems.map((item) => ({
+      serviceType: item.serviceType,
+      label: item.label,
+      linePrice: item.lineCents,
+      linePriceLabel: money(item.lineCents),
+      breakdown: item.breakdown,
+    })),
+    packageTotal,
+    packageTotalLabel: money(packageTotal),
+  };
+}
+
+const toBundleSummary = (b: repo.BundleRow) => ({
+  slug: b.slug,
+  name: b.name,
+  tagline: b.tagline,
+  blurb: b.blurb,
+  eventType: b.event_type,
+  badge: b.badge,
+  image: b.image_path === null ? null : { path: b.image_path, alt: b.image_alt ?? b.name },
+});
