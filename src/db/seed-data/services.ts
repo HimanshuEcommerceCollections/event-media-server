@@ -544,7 +544,10 @@ const droneVideo: SeedService = {
       },
     },
     ...included([
-      "FAA-licensed, insured pilot",
+      // No FAA-certification claim: the site does not verify a pilot licence,
+      // so it does not assert one. Insurance and the airspace check are things
+      // we do arrange, and those are what this says.
+      "Insured local pilot",
       "4K aerial video + stills",
       "Pre-flight site & airspace check",
       "Edited reel on request",
