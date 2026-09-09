@@ -14,7 +14,10 @@ import { rateLimit } from "./middleware/rateLimit.js";
 import { authRouter } from "./modules/auth/auth.routes.js";
 import { perksRouter } from "./modules/perks/perks.routes.js";
 import { contentRouter } from "./modules/content/content.routes.js";
-import { requestsRouter } from "./modules/requests/requests.routes.js";
+import { bookingsRouter } from "./modules/bookings/bookings.routes.js";
+import { pricingRouter } from "./modules/pricing/pricing.routes.js";
+import { vendorsRouter } from "./modules/vendors/vendors.routes.js";
+import { analyticsRouter } from "./modules/analytics/analytics.routes.js";
 import { pool } from "./db/pool.js";
 
 export function createApp() {
@@ -45,8 +48,9 @@ export function createApp() {
     }),
   );
 
-  // 100kb is generous for the largest body here (a quote request with its line
-  // items) and small enough that a huge payload is rejected before parsing.
+  // 100kb is generous for the largest body here (a booking request with six
+  // configured services) and small enough that a huge payload is rejected
+  // before parsing.
   app.use(express.json({ limit: "100kb" }));
 
   app.use((req, _res, next) => {
@@ -81,7 +85,10 @@ export function createApp() {
   app.use("/api/v1/auth", authRouter);
   app.use("/api/v1/perks", perksRouter);
   app.use("/api/v1/content", contentRouter);
-  app.use("/api/v1/requests", requestsRouter);
+  app.use("/api/v1/pricing", pricingRouter);
+  app.use("/api/v1/bookings", bookingsRouter);
+  app.use("/api/v1/vendors", vendorsRouter);
+  app.use("/api/v1/analytics", analyticsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
