@@ -88,6 +88,38 @@ export const env = {
    */
   exposeDevCodes: bool("EXPOSE_DEV_CODES", !isProd) && !isProd,
 
+  /**
+   * Where the frontend lives. Only used to build the link in a password-reset
+   * mail, so it has to be the deployed origin, not the API's own.
+   */
+  appUrl: str("APP_URL", "http://localhost:3000").replace(/\/+$/, ""),
+  /** Path on the frontend that accepts `?token=`. */
+  passwordResetPath: str("PASSWORD_RESET_PATH", "/reset-password"),
+
+  mail: {
+    /**
+     * With no SMTP_HOST the mailer stays a no-op and codes are logged instead,
+     * which is what keeps a local run working with no provider. Production
+     * refuses to boot in that state - see assertMailConfigured.
+     */
+    enabled: str("SMTP_HOST", "") !== "",
+    host: str("SMTP_HOST", ""),
+    port: int("SMTP_PORT", 587),
+    /**
+     * True only for implicit TLS on 465. On 587 the connection starts plain
+     * and upgrades via STARTTLS, so this stays false there.
+     */
+    secure: bool("SMTP_SECURE", int("SMTP_PORT", 587) === 465),
+    user: str("SMTP_USER", ""),
+    password: str("SMTP_PASSWORD", ""),
+    /** Falls back to the authenticating account, which is what Gmail expects. */
+    from: str("MAIL_FROM", str("SMTP_USER", "")),
+    /** The name shown in the subject line and the mail body. */
+    brand: str("MAIL_BRAND", "Events & Media"),
+    /** A hung SMTP dial should not hold an HTTP request open. */
+    timeoutMs: int("SMTP_TIMEOUT_MS", 10_000),
+  },
+
   /** Requests per window, per IP, on the auth endpoints. */
   rateLimit: {
     windowSeconds: int("RATE_LIMIT_WINDOW_SECONDS", 60),
@@ -114,6 +146,26 @@ export function assertProductionSecrets(): void {
     throw new Error(
       `Refusing to start in production with development secrets: ${weak.join(", ")}. ` +
         "Set them to values of at least 32 random characters.",
+    );
+  }
+}
+
+/**
+ * Without a mail provider in production, the one-time code is generated and
+ * then dropped: EXPOSE_DEV_CODES is forced off there, so nobody can ever
+ * complete a sign-in. Fail at boot rather than at the first sign-in attempt.
+ */
+export function assertMailConfigured(): void {
+  if (!env.isProd) return;
+  const missing: string[] = [];
+  if (env.mail.host === "") missing.push("SMTP_HOST");
+  if (env.mail.user === "") missing.push("SMTP_USER");
+  if (env.mail.password === "") missing.push("SMTP_PASSWORD");
+  if (env.mail.from === "") missing.push("MAIL_FROM");
+  if (missing.length > 0) {
+    throw new Error(
+      `Refusing to start in production without mail delivery: ${missing.join(", ")} not set. ` +
+        "Sign-in and password reset both depend on it.",
     );
   }
 }

@@ -26,6 +26,7 @@ import {
 import { conflict, invalidCredentials, notFound, tooManyRequests, unauthorized } from "../../lib/http.js";
 import { nowSeconds } from "../../lib/ids.js";
 import { logger } from "../../lib/logger.js";
+import { sendOtpEmail, sendPasswordResetEmail } from "../../lib/mailer.js";
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from "../../lib/tokens.js";
 import { withTransaction } from "../../db/pool.js";
 import { drawPerk } from "../perks/perks.catalogue.js";
@@ -102,8 +103,9 @@ function initialsOf(fullName: string): string {
 
 /**
  * Issues a fresh code and returns what the client needs to render the OTP
- * step. Sending the mail is a stub for now: it is logged, and echoed in the
- * response when EXPOSE_DEV_CODES is on.
+ * step. The mail is sent but not awaited: the challenge is already stored, so
+ * holding the response open on an SMTP round-trip only makes the form slower
+ * and hands a timing signal to anyone probing for registered addresses.
  */
 async function issueChallenge(
   user: UserRow,
@@ -134,15 +136,34 @@ async function issueChallenge(
 }
 
 /**
- * Stands in for the mail provider. Kept as one function so wiring a real one
- * up later is a single change, and so the code is never logged in production.
+ * Hands the code to the mail provider. The code itself is logged only when
+ * EXPOSE_DEV_CODES is on, which never happens in production - otherwise a log
+ * reader could complete anyone's sign-in.
  */
-function deliverCode(email: string, code: string, purpose: string): void {
+function deliverCode(email: string, code: string, purpose: "signup" | "signin"): void {
   if (env.exposeDevCodes) {
     logger.info("one-time code issued", { email, purpose, code });
   } else {
     logger.info("one-time code issued", { email, purpose });
   }
+
+  // Fire-and-forget: sendOtpEmail resolves false and logs rather than
+  // rejecting, so the catch here is only a guard against an unexpected throw
+  // leaving an unhandled rejection behind.
+  void sendOtpEmail(email, code, purpose).then(
+    (sent) => {
+      if (!sent && !env.exposeDevCodes) {
+        logger.error("one-time code was not delivered", { email, purpose });
+      }
+    },
+    (err: unknown) => {
+      logger.error("one-time code delivery threw", {
+        email,
+        purpose,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    },
+  );
 }
 
 /* ------------------------------------------------------------------ signup */
@@ -394,6 +415,23 @@ export async function forgotPassword(input: EmailOnlyInput): Promise<ForgotPassw
     email: user.email,
     ...(env.exposeDevCodes ? { token } : {}),
   });
+
+  // Not awaited, for the same reason as the one-time code: an unknown address
+  // returns immediately, so a known one has to as well or the difference in
+  // timing answers the question this endpoint refuses to answer.
+  void sendPasswordResetEmail(user.email, token).then(
+    (sent) => {
+      if (!sent && !env.exposeDevCodes) {
+        logger.error("password reset mail was not delivered", { email: user.email });
+      }
+    },
+    (err: unknown) => {
+      logger.error("password reset mail threw", {
+        email: user.email,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    },
+  );
 
   return { status: "sent", ...(env.exposeDevCodes ? { devToken: token } : {}) };
 }
