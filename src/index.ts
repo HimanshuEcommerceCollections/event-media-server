@@ -1,24 +1,31 @@
 /**
  * Server entry point.
  *
- * Boot order matters: refuse to start on weak production secrets, wait for
- * Postgres, migrate, seed the content tables if they are empty, and only then
- * listen — so the first request never lands on a half-ready database.
+ * Boot order matters: refuse to start on weak production secrets or without a
+ * mail provider, wait for Postgres, migrate, seed the content tables if they
+ * are empty, and only then listen — so the first request never lands on a
+ * half-ready database.
  */
 
 import { createApp } from "./app.js";
-import { assertProductionSecrets, env } from "./config/env.js";
+import { assertMailConfigured, assertProductionSecrets, env } from "./config/env.js";
 import { closeDatabase, waitForDatabase } from "./db/pool.js";
 import { runMigrations } from "./db/migrate.js";
 import { seedIfEmpty } from "./db/seed.js";
 import { logger } from "./lib/logger.js";
+import { closeMailer, verifyMailer } from "./lib/mailer.js";
 
 async function main(): Promise<void> {
   assertProductionSecrets();
+  assertMailConfigured();
 
   await waitForDatabase();
   await runMigrations();
   await seedIfEmpty();
+
+  // Logs rather than throws: bad SMTP credentials should surface here, not at
+  // the first sign-in, but they must not keep the public content offline.
+  await verifyMailer();
 
   // Loud, because a limiter that is silently off is a limiter nobody notices
   // is off.
@@ -33,6 +40,7 @@ async function main(): Promise<void> {
       env: env.nodeEnv,
       cors: env.corsOrigins.join(", "),
       devCodes: env.exposeDevCodes,
+      mail: env.mail.enabled ? env.mail.host : "off",
     });
   });
 
@@ -51,6 +59,7 @@ async function main(): Promise<void> {
     forced.unref();
 
     server.close(() => {
+      closeMailer();
       void closeDatabase()
         .catch((err: unknown) => {
           logger.error("failed to close the database pool", {
