@@ -18,6 +18,7 @@ import { bookingsRouter } from "./modules/bookings/bookings.routes.js";
 import { pricingRouter } from "./modules/pricing/pricing.routes.js";
 import { vendorsRouter } from "./modules/vendors/vendors.routes.js";
 import { analyticsRouter } from "./modules/analytics/analytics.routes.js";
+import { adminRouter } from "./modules/admin/admin.routes.js";
 import { pool } from "./db/pool.js";
 
 export function createApp() {
@@ -89,6 +90,7 @@ export function createApp() {
   app.use("/api/v1/bookings", bookingsRouter);
   app.use("/api/v1/vendors", vendorsRouter);
   app.use("/api/v1/analytics", analyticsRouter);
+  app.use("/api/v1/admin", adminRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
