@@ -11,13 +11,13 @@ import jwt from "jsonwebtoken";
 import { env } from "../config/env.js";
 import { unauthorized } from "./http.js";
 
-export type AccessClaims = { sub: string; email: string; typ: "access" };
+export type AccessClaims = { sub: string; email: string; role: string; typ: "access" };
 export type RefreshClaims = { sub: string; sid: string; typ: "refresh" };
 
 const base = { issuer: env.jwt.issuer, audience: env.jwt.audience } as const;
 
-export function signAccessToken(userId: string, email: string): string {
-  const payload: AccessClaims = { sub: userId, email, typ: "access" };
+export function signAccessToken(userId: string, email: string, role: string): string {
+  const payload: AccessClaims = { sub: userId, email, role, typ: "access" };
   return jwt.sign(payload, env.jwt.accessSecret, {
     ...base,
     expiresIn: env.jwt.accessTtlSeconds,

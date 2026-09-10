@@ -10,7 +10,7 @@
 
 import type { RequestHandler } from "express";
 import { bearerFrom, verifyAccessToken } from "../lib/tokens.js";
-import { unauthorized } from "../lib/http.js";
+import { forbidden, unauthorized } from "../lib/http.js";
 
 export const resolveAuth: RequestHandler = (req, _res, next) => {
   const token = bearerFrom(req.headers.authorization);
@@ -20,7 +20,7 @@ export const resolveAuth: RequestHandler = (req, _res, next) => {
   }
   try {
     const claims = verifyAccessToken(token);
-    req.auth = { userId: claims.sub, email: claims.email };
+    req.auth = { userId: claims.sub, email: claims.email, role: claims.role };
   } catch {
     // A bad token is treated as no token. The endpoints that need an identity
     // answer 401 themselves, so a stale token in storage cannot make an
@@ -33,6 +33,18 @@ export const resolveAuth: RequestHandler = (req, _res, next) => {
 export const requireAuth: RequestHandler = (req, _res, next) => {
   if (!req.auth) {
     next(unauthorized());
+    return;
+  }
+  next();
+};
+
+/**
+ * For admin-only endpoints. Must run after requireAuth: it trusts req.auth to
+ * already be set and only checks the role carried in it.
+ */
+export const requireAdmin: RequestHandler = (req, _res, next) => {
+  if (req.auth?.role !== "admin") {
+    next(forbidden());
     return;
   }
   next();

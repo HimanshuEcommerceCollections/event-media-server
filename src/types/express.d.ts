@@ -9,7 +9,7 @@ declare global {
   namespace Express {
     interface Request {
       /** Set by resolveAuth when a valid bearer token is present. */
-      auth?: { userId: string; email: string };
+      auth?: { userId: string; email: string; role: string };
       validatedQuery?: unknown;
       validatedParams?: unknown;
     }

@@ -302,7 +302,7 @@ export async function verifyOtp(input: VerifyOtpInput, meta: RequestMeta): Promi
   });
 
   return {
-    accessToken: signAccessToken(outcome.user.id, outcome.user.email),
+    accessToken: signAccessToken(outcome.user.id, outcome.user.email, outcome.user.role),
     refreshToken: signRefreshToken(outcome.user.id, outcome.session.id, outcome.remember),
     expiresInSeconds: env.jwt.accessTtlSeconds,
     user: toUserDto(outcome.user),
@@ -360,7 +360,7 @@ export async function refresh(refreshToken: string, meta: RequestMeta): Promise<
     );
 
     return {
-      accessToken: signAccessToken(user.id, user.email),
+      accessToken: signAccessToken(user.id, user.email, user.role),
       refreshToken: signRefreshToken(user.id, next.id, session.remember),
       expiresInSeconds: env.jwt.accessTtlSeconds,
       user: toUserDto(user),
