@@ -95,3 +95,12 @@ export function createApp() {
 
   return app;
 }
+
+/**
+ * Vercel's Express preset loads this module as the function entrypoint and
+ * requires the app itself as the default export; without it every invocation
+ * fails before a single middleware runs. Nothing here listens or touches the
+ * database, so index.ts remains the entry for Docker and local runs, where it
+ * still calls createApp() itself after the boot sequence.
+ */
+export default createApp();
