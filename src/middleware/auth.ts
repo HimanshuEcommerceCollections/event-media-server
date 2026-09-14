@@ -11,6 +11,7 @@
 import type { RequestHandler } from "express";
 import { bearerFrom, verifyAccessToken } from "../lib/tokens.js";
 import { forbidden, unauthorized } from "../lib/http.js";
+import { findVendorByUserId } from "../modules/vendors/vendors.repo.js";
 
 export const resolveAuth: RequestHandler = (req, _res, next) => {
   const token = bearerFrom(req.headers.authorization);
@@ -48,4 +49,35 @@ export const requireAdmin: RequestHandler = (req, _res, next) => {
     return;
   }
   next();
+};
+
+/**
+ * For the vendor portal. Must run after requireAuth.
+ *
+ * Unlike requireAdmin this asks the database rather than the token: the role
+ * on an access token is whatever it was when the token was minted, and a
+ * customer who is approved as a vendor mid-session would otherwise be locked
+ * out of their own dashboard until the token expired. The vendor profile is
+ * the authority on whether somebody can act as a vendor, so it is also what
+ * the guard loads — and the handlers below it get it for free on req.vendor.
+ */
+export const requireVendor: RequestHandler = (req, _res, next) => {
+  if (!req.auth) {
+    next(unauthorized());
+    return;
+  }
+  findVendorByUserId(req.auth.userId)
+    .then((vendor) => {
+      if (vendor === null) {
+        next(forbidden("This account is not set up as a vendor."));
+        return;
+      }
+      if (!vendor.is_active) {
+        next(forbidden("This vendor account is suspended. Talk to your coordinator."));
+        return;
+      }
+      req.vendor = vendor;
+      next();
+    })
+    .catch(next);
 };
