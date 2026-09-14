@@ -160,14 +160,16 @@ mountResource({
     surface: z.string().trim().min(1).max(120),
     imagePath: z.string().trim().min(1).max(400),
     label: z.string().trim().min(1).max(200),
-    caption: z.string().trim().max(500).optional(),
+    // The column is nullable, so a round trip that reads an item with no
+    // caption and writes it straight back has to be accepted rather than 422'd.
+    caption: z.string().trim().max(500).nullable().optional(),
     sortOrder: z.number().int().default(0),
   }),
   updateSchema: z.object({
     surface: z.string().trim().min(1).max(120).optional(),
     imagePath: z.string().trim().min(1).max(400).optional(),
     label: z.string().trim().min(1).max(200).optional(),
-    caption: z.string().trim().max(500).optional(),
+    caption: z.string().trim().max(500).nullable().optional(),
     sortOrder: z.number().int().optional(),
   }),
   allowDelete: true,
