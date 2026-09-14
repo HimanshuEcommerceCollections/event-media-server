@@ -16,6 +16,7 @@ import { adminUsersRouter } from "./admin.users.routes.js";
 import { adminContentRouter } from "./admin.content.routes.js";
 import { adminServicesRouter } from "./admin.services.routes.js";
 import { adminBundlesRouter } from "./admin.bundles.routes.js";
+import { adminAssignmentsRouter } from "./admin.assignments.routes.js";
 
 export const adminRouter = Router();
 
@@ -29,6 +30,7 @@ adminRouter.get(
 );
 
 adminRouter.use("/bookings", adminBookingsRouter);
+adminRouter.use("/assignments", adminAssignmentsRouter);
 adminRouter.use("/vendors", adminVendorsRouter);
 adminRouter.use("/users", adminUsersRouter);
 adminRouter.use("/services", adminServicesRouter);
