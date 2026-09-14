@@ -74,15 +74,29 @@ export const findUserByEmail = (emailKey: string, tx?: Tx): Promise<UserRow | nu
 export const findUserById = (id: string, tx?: Tx): Promise<UserRow | null> =>
   on(tx).queryOne<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [id]);
 
+/**
+ * `role` and `emailVerified` default to what a self-service sign-up gets. The
+ * vendor invite is the one caller that overrides them: a coordinator has
+ * already approved that address, and every sign-in still proves control of
+ * the mailbox with its own one-time code.
+ */
 export async function insertUser(
-  input: { email: string; fullName: string; passwordHash: string; acceptedTos: boolean },
+  input: {
+    email: string;
+    fullName: string;
+    passwordHash: string;
+    acceptedTos: boolean;
+    role?: string;
+    emailVerified?: boolean;
+  },
   tx?: Tx,
 ): Promise<UserRow> {
   const now = nowSeconds();
   const row = await on(tx).queryOne<UserRow>(
     `INSERT INTO users
-       (id, email, email_key, full_name, password_hash, accepted_tos_at, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+       (id, email, email_key, full_name, password_hash, email_verified, accepted_tos_at,
+        role, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
      RETURNING ${USER_COLUMNS}`,
     [
       newId("usr"),
@@ -90,13 +104,22 @@ export async function insertUser(
       input.email.toLowerCase(),
       input.fullName,
       input.passwordHash,
+      input.emailVerified ?? false,
       input.acceptedTos ? now : null,
+      input.role ?? "customer",
       now,
     ],
   );
   if (row === null) throw new Error("insertUser returned no row");
   return row;
 }
+
+export const updateUserRole = (userId: string, role: string, tx?: Tx): Promise<number> =>
+  on(tx).execute("UPDATE users SET role = $2, updated_at = $3 WHERE id = $1", [
+    userId,
+    role,
+    nowSeconds(),
+  ]);
 
 export const markEmailVerified = (userId: string, tx?: Tx): Promise<number> =>
   on(tx).execute(
