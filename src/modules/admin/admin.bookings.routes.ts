@@ -11,6 +11,7 @@ import { ok } from "../../lib/http.js";
 import { validate } from "../../middleware/validate.js";
 import { parsePageQuery } from "../../lib/pagination.js";
 import { getBooking, listBookings, updateBookingStatus } from "./admin.bookings.service.js";
+import { createAssignment, listAssignments } from "./admin.assignments.service.js";
 
 export const adminBookingsRouter = Router();
 
@@ -40,6 +41,41 @@ adminBookingsRouter.get(
   asyncHandler(async (req, res) => {
     const { id } = req.validatedParams as { id: string };
     ok(res, await getBooking(id));
+  }),
+);
+
+/* ------------------------------------------------- offers made on a booking */
+
+const createAssignmentSchema = z.object({
+  vendorId: z.string().trim().min(1).max(200),
+  serviceType: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    .max(64),
+  // What the vendor is paid, which is the coordinator's call and not derived
+  // from what the customer was quoted for the same line.
+  payoutCents: z.number().int().min(0).nullable().optional(),
+  note: z.string().trim().max(1000).nullable().optional(),
+});
+
+adminBookingsRouter.get(
+  "/:id/assignments",
+  validate(idParams, "params"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.validatedParams as { id: string };
+    ok(res, await listAssignments(id));
+  }),
+);
+
+adminBookingsRouter.post(
+  "/:id/assignments",
+  validate(idParams, "params"),
+  validate(createAssignmentSchema),
+  asyncHandler(async (req, res) => {
+    const { id } = req.validatedParams as { id: string };
+    ok(res, await createAssignment(id, req.body as z.infer<typeof createAssignmentSchema>), 201);
   }),
 );
 

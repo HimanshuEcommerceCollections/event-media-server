@@ -198,3 +198,42 @@ export async function sendPasswordResetEmail(to: string, token: string): Promise
     ),
   });
 }
+
+/**
+ * The vendor invite. Sent once a coordinator approves an application into an
+ * account, and it carries a password-reset token rather than a password: the
+ * account is created with a random hash nobody has ever seen, so choosing a
+ * password through this link is the only way into it.
+ *
+ * The link therefore has to be honest about its lifetime — an invite that
+ * expires in an hour and reads like a permanent welcome is a support ticket.
+ */
+export async function sendVendorInviteEmail(
+  to: string,
+  businessName: string,
+  token: string,
+): Promise<boolean> {
+  const url = `${env.appUrl}${env.passwordResetPath}?token=${encodeURIComponent(token)}`;
+  const safeUrl = escapeHtml(url);
+  const valid = minutes(env.passwordReset.ttlSeconds);
+  const lead = `${businessName} has been approved as a ${env.mail.brand} vendor.`;
+  const footer = `This link expires in ${valid} and works once. If it has already lapsed, use "Forgot password" on the sign-in page with this address and you will get a fresh one.`;
+
+  return send({
+    to,
+    subject: `You are approved — set up your ${env.mail.brand} vendor account`,
+    text: `${lead} Choose a password with the link below and your dashboard is ready.\n\n${url}\n\n${footer}`,
+    html: layout(
+      "You are approved",
+      [
+        `<p style="margin:0 0 20px">${escapeHtml(lead)} Choose a password below and your vendor dashboard is ready — jobs you are offered will show up there.</p>`,
+        '<p style="margin:0 0 20px;text-align:center">',
+        `<a href="${safeUrl}" style="display:inline-block;padding:12px 26px;background:#1c1b19;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;font-size:15px">Set your password</a>`,
+        "</p>",
+        '<p style="margin:0 0 20px;font-size:13px;color:#6b6559;word-break:break-all">Or paste this into your browser:<br>',
+        `<a href="${safeUrl}" style="color:#6b6559">${safeUrl}</a></p>`,
+        `<p style="margin:0;color:#6b6559">${footer}</p>`,
+      ].join(""),
+    ),
+  });
+}

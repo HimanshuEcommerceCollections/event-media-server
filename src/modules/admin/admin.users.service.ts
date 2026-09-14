@@ -55,6 +55,17 @@ export async function listUsers(
 export async function updateUserRole(id: string, role: string, callerId: string) {
   if (id === callerId) throw badRequest("You cannot change your own role.");
 
+  // A vendor's access comes from their profile, not from this column, so
+  // flipping the role here would leave the portal working while the account
+  // stopped looking like a vendor everywhere else. Suspending them on the
+  // vendor directory is the control that actually does something.
+  const vendor = await queryOne<{ id: string }>("SELECT id FROM vendors WHERE user_id = $1", [id]);
+  if (vendor !== null) {
+    throw badRequest(
+      "This account is a vendor. Change what it can do from the vendor directory instead.",
+    );
+  }
+
   const row = await queryOne<UserRow>(
     `UPDATE users SET role = $2, updated_at = $3 WHERE id = $1
        RETURNING id, email, full_name, role, email_verified, created_at, last_signin_at`,
