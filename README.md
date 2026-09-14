@@ -204,6 +204,63 @@ record and the response both carry `verified: false`, and no surface may
 present a submitted number as a certification. Part-107 details sent by an
 applicant who is not applying to fly are dropped rather than stored.
 
+Approving an application is what creates the account behind it — see
+**Vendor portal** below.
+
+### Vendor portal — requires a vendor account
+
+| Method | Path                                             | Notes                              |
+| ------ | ------------------------------------------------ | ---------------------------------- |
+| GET    | `/api/v1/vendors/me`                             | Profile plus the work summary      |
+| PATCH  | `/api/v1/vendors/me`                             | How the vendor describes itself    |
+| GET    | `/api/v1/vendors/me/assignments`                 | `?status=` filters; paginated      |
+| GET    | `/api/v1/vendors/me/assignments/:id`             | One job                            |
+| POST   | `/api/v1/vendors/me/assignments/:id/respond`     | `{ action: accept \| decline }`     |
+| POST   | `/api/v1/vendors/me/assignments/:id/complete`    | Only from `accepted`               |
+
+Nothing under `/me` takes a vendor id: `requireVendor` resolves the caller's
+profile and the handlers can only act as that one, so changing an id in a URL
+reaches nothing. A job the caller does not hold answers 404 rather than 403,
+so ids cannot be probed.
+
+**A vendor sees the job, not the customer.** The event, date, area, headcount
+band and their own payout are on every offer; the customer's name, email and
+phone appear only once the offer has been *accepted*, and what the customer
+paid for that line is never sent at all — `payout_cents` is set by the
+coordinator and is a different number.
+
+`requireVendor` asks the database, not the access token. A customer approved
+as a vendor mid-session would otherwise be locked out of their own dashboard
+until their token expired.
+
+### Admin API — requires role `admin`
+
+| Method      | Path                                          | Notes                                |
+| ----------- | --------------------------------------------- | ------------------------------------ |
+| GET         | `/api/v1/admin/summary`                       | Counts by status, plus 7d analytics  |
+| GET/PATCH   | `/api/v1/admin/bookings`, `/:id`, `/:id/status` | The booking pipeline               |
+| GET/POST    | `/api/v1/admin/bookings/:id/assignments`      | Offers against one booking           |
+| PATCH/DELETE| `/api/v1/admin/assignments/:id`               | Edit or remove one offer             |
+| GET/PATCH   | `/api/v1/admin/vendors`, `/:id`, `/:id/status`  | Applications                       |
+| GET/PATCH   | `/api/v1/admin/vendors/accounts`, `/accounts/:id` | The vendor directory             |
+| GET/PATCH   | `/api/v1/admin/users`, `/:id/role`            | Accounts                             |
+| CRUD        | `/api/v1/admin/services`, `/bundles`          | Catalogue, with nested blocks/items  |
+| CRUD        | `/api/v1/admin/content-pages`, `/legal-documents`, `/gallery-items`, `/featured-events`, `/categories`, `/stats`, `/testimonials`, `/reviews` | Generic content resources |
+
+Two admin writes do more than they look like:
+
+- `PATCH /admin/vendors/:id/status` with `approved` **provisions the vendor
+  account** — a `users` row with role `vendor`, a `vendors` profile, and an
+  invite mail carrying a single-use password-reset link. It is idempotent, so
+  approving twice changes nothing. The response carries `account:
+  { vendorId, accountCreated, inviteSent }`.
+- Any write under `/admin/services` drops the in-memory pricing catalogue, so
+  an edited price is quoted immediately rather than after a restart. The cache
+  is per process: a multi-instance deployment still needs each one to turn over.
+
+`/admin/vendors/accounts` is declared before `/admin/vendors/:id`, because
+Express matches in declaration order.
+
 ### Analytics
 
 | Method | Path                        | Notes                             |
@@ -221,14 +278,24 @@ write is swallowed rather than failing the beacon that carried it.
 database and answers 503 if it is unreachable — that is the one Compose and a
 load balancer should watch.
 
-## No protected routes
+## What is gated, and how
 
 `resolveAuth` runs on every request and never rejects: a missing or expired
-token simply leaves the caller anonymous. No page is gated behind a sign-in and
-there is no role check yet. The only endpoints that ask for an identity are the
-ones that would have nothing to return without one — `/auth/me`,
-`/perks/me`, `/requests/mine` — and a stale token in browser storage can never
-make an otherwise public request fail.
+token simply leaves the caller anonymous, so a stale token in browser storage
+can never make an otherwise public request fail. Everything the site paints for
+a visitor — content, pricing, the builder's quote, submitting a booking,
+applying as a vendor — stays open.
+
+Three guards sit on top of it:
+
+| Guard           | Answers                          | Used by                     |
+| --------------- | -------------------------------- | --------------------------- |
+| `requireAuth`   | Is there a valid token?          | `/auth/me`, `/perks/me`, `/bookings/mine` |
+| `requireAdmin`  | Does the token say role `admin`? | every `/api/v1/admin/*`     |
+| `requireVendor` | Does this account have a live vendor profile? | every `/api/v1/vendors/me/*` |
+
+`requireAdmin` trusts the token's role; `requireVendor` does not, and loads the
+profile instead — the note under **Vendor portal** says why.
 
 ## How it is put together
 
