@@ -3,11 +3,20 @@
  * the tableResource factory: `get` also loads the service's blocks, and
  * `update` optionally replaces every block for that service in one
  * transaction when the caller sends `blocks`.
+ *
+ * Every write drops the in-memory pricing catalogue. It is built from these
+ * two tables and is otherwise only rebuilt by the seed, so without this an
+ * edited price, a rewritten `pricing` block or a deactivated service would
+ * keep being quoted from the old catalogue until the process restarted — the
+ * admin would see the new figure and the visitor would be given the old one.
+ * NOTE: the cache is per process, so a multi-instance deployment still needs
+ * every instance to turn over before they all agree.
  */
 
 import { query, queryOne, withTransaction } from "../../db/pool.js";
 import { notFound } from "../../lib/http.js";
 import { newId } from "../../lib/ids.js";
+import { invalidateCatalogue } from "../pricing/pricing.catalogue.js";
 
 type ServiceRow = {
   slug: string;
@@ -126,6 +135,7 @@ export async function createService(input: ServiceInput) {
     ],
   );
   if (row === null) throw new Error("insert into services returned no row");
+  invalidateCatalogue();
   return { ...toDto(row), blocks: [] as ReturnType<typeof blockToDto>[] };
 }
 
@@ -183,5 +193,6 @@ export async function updateService(
     }
   });
 
+  invalidateCatalogue();
   return getService(slug);
 }
