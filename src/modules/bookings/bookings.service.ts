@@ -86,14 +86,18 @@ export async function createBooking(input: CreateBookingInput, userId: string | 
 
   const largeEventFlag = isLargeEvent(input.event.type, input.event.headcountBand);
 
+  // `updated_at` has no database default, so the insert has to stamp it: a row
+  // is "updated" at the moment it is raised until a coordinator moves it on.
+  const now = nowSeconds();
+
   const row = await withTransaction(async (tx) => {
     const reference = await nextReference("EVM", tx);
     const rows = await tx.query<BookingRow>(
       `INSERT INTO event_booking_requests
          (id, request_id, brand, user_id, event_type, event_date, headcount_band,
           event_zip, large_event_flag, line_items, package_total, budget_band,
-          contact, notes, source, created_at)
-       VALUES ($1,$2,'events',$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12::jsonb,$13,$14,$15)
+          contact, notes, source, created_at, updated_at)
+       VALUES ($1,$2,'events',$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12::jsonb,$13,$14,$15,$15)
        RETURNING id, request_id, brand, event_type, event_date, headcount_band,
                  event_zip, large_event_flag, line_items, package_total, budget_band,
                  contact, notes, source, status, created_at`,
@@ -112,7 +116,7 @@ export async function createBooking(input: CreateBookingInput, userId: string | 
         JSON.stringify(input.contact),
         input.notes ?? null,
         input.source,
-        nowSeconds(),
+        now,
       ],
     );
     return rows[0] ?? null;
