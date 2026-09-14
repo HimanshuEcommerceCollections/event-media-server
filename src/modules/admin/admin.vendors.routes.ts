@@ -1,5 +1,12 @@
 /**
- * /api/v1/admin/vendors/* — vendor_applications, from the coordinator's side.
+ * /api/v1/admin/vendors/* — the coordinator's side of both halves of the
+ * vendor flow: `/` and `/:id` are the applications, `/accounts*` is the
+ * directory of vendors those applications became.
+ *
+ * `/accounts` is declared before `/:id` on purpose: Express matches in
+ * declaration order, so the other way round an application id of "accounts"
+ * is the only thing standing between the directory and a 404.
+ *
  * Mounted under adminRouter, which already gates on requireAuth + requireAdmin.
  */
 
@@ -10,6 +17,11 @@ import { ok } from "../../lib/http.js";
 import { validate } from "../../middleware/validate.js";
 import { parsePageQuery } from "../../lib/pagination.js";
 import { getVendor, listVendors, updateVendorStatus } from "./admin.vendors.service.js";
+import {
+  getVendorAccount,
+  listVendorAccounts,
+  updateVendorAccount,
+} from "./admin.vendorAccounts.service.js";
 
 export const adminVendorsRouter = Router();
 
@@ -22,6 +34,86 @@ const listQuerySchema = z.object({
 });
 
 const idParams = z.object({ id: z.string().trim().min(1).max(200) });
+
+/* ------------------------------------------------------- the vendor directory */
+
+const accountsQuerySchema = z.object({
+  // Narrows the directory to vendors who cover this service, which is the
+  // only question the "offer this line to…" picker ever asks.
+  serviceType: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    .max(64)
+    .optional(),
+  includeInactive: z.enum(["true", "false"]).optional(),
+  page: z.string().optional(),
+  pageSize: z.string().optional(),
+});
+
+const accountPatchSchema = z
+  .object({
+    businessName: z.string().trim().min(2).max(160).optional(),
+    contactName: z.string().trim().min(2).max(120).optional(),
+    phone: z.string().trim().max(40).nullable().optional(),
+    serviceArea: z.string().trim().max(200).nullable().optional(),
+    // What this vendor may be offered. A coordinator's decision, which is why
+    // it is here and not on the vendor's own PATCH.
+    serviceTypes: z
+      .array(
+        z
+          .string()
+          .trim()
+          .toLowerCase()
+          .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+          .max(64),
+      )
+      .max(20)
+      .optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: "Send at least one field to change." });
+
+adminVendorsRouter.get(
+  "/accounts",
+  validate(accountsQuerySchema, "query"),
+  asyncHandler(async (req, res) => {
+    const q = req.validatedQuery as z.infer<typeof accountsQuerySchema>;
+    const { page, pageSize, offset } = parsePageQuery(req.validatedQuery);
+    ok(
+      res,
+      await listVendorAccounts({
+        serviceType: q.serviceType,
+        includeInactive: q.includeInactive === "true",
+        page,
+        pageSize,
+        offset,
+      }),
+    );
+  }),
+);
+
+adminVendorsRouter.get(
+  "/accounts/:id",
+  validate(idParams, "params"),
+  asyncHandler(async (req, res) => {
+    const { id } = req.validatedParams as { id: string };
+    ok(res, await getVendorAccount(id));
+  }),
+);
+
+adminVendorsRouter.patch(
+  "/accounts/:id",
+  validate(idParams, "params"),
+  validate(accountPatchSchema),
+  asyncHandler(async (req, res) => {
+    const { id } = req.validatedParams as { id: string };
+    ok(res, await updateVendorAccount(id, req.body as z.infer<typeof accountPatchSchema>));
+  }),
+);
+
+/* --------------------------------------------------------------- applications */
 
 adminVendorsRouter.get(
   "/",

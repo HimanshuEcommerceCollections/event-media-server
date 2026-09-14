@@ -2,9 +2,13 @@
  * POST /api/v1/vendors/applications      — Become a Vendor
  * GET  /api/v1/vendors/applications/:ref — the submitted application
  * GET  /api/v1/vendors/service-types     — what can be applied for
+ * /api/v1/vendors/me/*                   — the approved vendor's dashboard
  *
- * Open to visitors: a vendor applies before they have an account, and the
- * reference is what they quote when they follow up.
+ * The first three are open to visitors: a vendor applies before they have an
+ * account, and the reference is what they quote when they follow up. The
+ * /me/* subtree is the other side of that — it only exists once a coordinator
+ * has approved the application into an account — and carries its own
+ * requireAuth + requireVendor guard.
  */
 
 import { Router } from "express";
@@ -15,8 +19,13 @@ import { validate } from "../../middleware/validate.js";
 import { rateLimit } from "../../middleware/rateLimit.js";
 import { cacheable } from "../../lib/cache.js";
 import { createApplication, getApplication, listServiceTypes } from "./vendors.service.js";
+import { vendorPortalRouter } from "./vendors.portal.routes.js";
 
 export const vendorsRouter = Router();
+
+// Before the public routes so a future "/me"-shaped reference can never be
+// read as an application reference.
+vendorsRouter.use("/me", vendorPortalRouter);
 
 const slug = z
   .string()
