@@ -259,7 +259,7 @@ export async function verifyOtp(input: VerifyOtpInput, meta: RequestMeta): Promi
       const left = env.otp.maxAttempts - (challenge.attempts + 1);
       throw unauthorized(
         left > 0
-          ? `That code is not right. ${left} ${left === 1 ? "try" : "tries"} left.`
+          ? `That code is not right.`
           : "Too many incorrect codes. Request a new one.",
       );
     }

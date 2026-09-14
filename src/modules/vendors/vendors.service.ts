@@ -64,14 +64,18 @@ export async function createApplication(input: ApplicationInput, userId: string 
   // in the record with nothing to explain why it is there.
   const part107 = flying ? (input.part107 ?? null) : null;
 
+  // `updated_at` has no database default, so the insert has to stamp it: an
+  // application is "updated" at the moment it lands until a reviewer moves it on.
+  const now = nowSeconds();
+
   const row = await withTransaction(async (tx) => {
     const reference = await nextReference("EVV", tx);
     const rows = await tx.query<ApplicationRow>(
       `INSERT INTO vendor_applications
          (id, reference, user_id, business_name, contact_name, email, phone, website,
           service_types, years_active, service_area, has_insurance, part107,
-          portfolio_url, notes, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13::jsonb,$14,$15,$16)
+          portfolio_url, notes, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13::jsonb,$14,$15,$16,$16)
        RETURNING id, reference, business_name, contact_name, email, phone, website,
                  service_types, years_active, service_area, has_insurance, part107,
                  portfolio_url, notes, status, created_at`,
@@ -91,7 +95,7 @@ export async function createApplication(input: ApplicationInput, userId: string 
         part107 === null ? null : JSON.stringify(part107),
         input.portfolioUrl ?? null,
         input.notes ?? null,
-        nowSeconds(),
+        now,
       ],
     );
     return rows[0] ?? null;
